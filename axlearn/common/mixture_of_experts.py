@@ -674,11 +674,13 @@ class TransformerFeedForwardMoE(BaseLayer):
         dropout: InstantiableConfig = Dropout.default_config()
         stochastic_depth: InstantiableConfig = StochasticDepth.default_config()
         # The inner structure of the layer: "prenorm", "postnorm", "hybridnorm",
-        # "hybridnorm_v2", "nonorm".
+        # "hybridnorm_v2", "hybridnorm_v3", "nonorm".
         # * prenorm: y = x + feedforward(norm(x))
         # * postnorm: y = norm(x + feedforward(x))
         # * hybridnorm: y = postnorm(x + feedforward(prenorm(x)))
         # * hybridnorm_v2: y = postnorm(x + prenorm(feedforward(x)))
+        # * hybridnorm_v3: y = (resnorm(x) if apply_residual_norm else postnorm(x)
+        #                       + prenorm(feedforward(postnorm(x))))
         # * nonorm: y = feedforward(x)   # no residual, which is usually applied externally.
         #
         # References:
@@ -711,6 +713,9 @@ class TransformerFeedForwardMoE(BaseLayer):
 
         # Optional prenorm_scale parameter.
         prenorm_scale: Optional[float] = None
+
+        # Optional apply_residual_norm parameter.
+        apply_residual_norm: Optional[bool] = None
 
     @classmethod
     def default_config(cls) -> Config:
@@ -763,16 +768,16 @@ class TransformerFeedForwardMoE(BaseLayer):
             )
         return params
 
-    def __init__(self, cfg: Config, *, parent: Module):
-        super().__init__(cfg, parent=parent)
-        cfg: TransformerFeedForwardMoE.Config = self.config
+    def __init__(self, config: Config, *, parent: Module):
+        super().__init__(config, parent=parent)
+        cfg = self.config
         self._add_child("gating", cfg.gating.set(num_experts=cfg.num_experts))
         self._add_child("stochastic_depth", cfg.stochastic_depth)
         # Add norm layers for different structures.
         if cfg.structure in ["prenorm", "postnorm"]:
             self._add_child("norm", cfg.norm.set(input_dim=cfg.input_dim))
-        elif cfg.structure in ("hybridnorm", "hybridnorm_v2"):
-            if cfg.prenorm_scale:
+        elif cfg.structure in ("hybridnorm", "hybridnorm_v2", "hybridnorm_v3"):
+            if cfg.prenorm_scale is not None:
                 self._add_child(
                     "prenorm",
                     cfg.norm.clone().set(
@@ -789,8 +794,12 @@ class TransformerFeedForwardMoE(BaseLayer):
             pass
         else:
             raise NotImplementedError(cfg.structure)
+        if cfg.apply_residual_norm:
+            # NOTE(reed): the apply_residual_norm is only available for hybridnorm_v3 now.
+            assert cfg.structure == "hybridnorm_v3"
+            self._add_child("resnorm", cfg.norm.set(input_dim=cfg.input_dim))
         # Add dropout layers for different structures.
-        if cfg.structure in ["prenorm", "hybridnorm", "hybridnorm_v2", "nonorm"]:
+        if cfg.structure in ["prenorm", "hybridnorm", "hybridnorm_v2", "hybridnorm_v3", "nonorm"]:
             self._add_child("dropout1", cfg.dropout)
             self._add_child("dropout2", cfg.dropout)
         elif cfg.structure in ["postnorm"]:
@@ -832,6 +841,17 @@ class TransformerFeedForwardMoE(BaseLayer):
             if cfg.residual_weight != 1:
                 x *= cfg.residual_weight
             x = self.postnorm(inputs + self.prenorm(x))
+        elif cfg.structure == "hybridnorm_v3":
+            # input for the tranformation function.
+            fn_input = self.postnorm(inputs)
+            # residual value.
+            res_value = self.resnorm(inputs) if cfg.apply_residual_norm else fn_input
+            # ffn output.
+            ffn_output = self._dispatch_and_combine(fn_input)
+            # the output of the transformation function.
+            fn_output = self.stochastic_depth(self.dropout2(self.prenorm(ffn_output)))
+            # the final output with res_value & fn_output.
+            x = res_value + fn_output
         elif cfg.structure == "nonorm":
             x = self._dispatch_and_combine(inputs)
             x = self.dropout2(x)
@@ -887,7 +907,7 @@ class TransformerFeedForwardMoE(BaseLayer):
         x = jnp.einsum("ogsec,ogsm->oegcm", dispatch_tensor, x)
         x = with_sharding_constraint(x, cfg.dim_to_mesh_axis_map["oegcm"])
         x = self._wi_activation(x)
-        if cfg.structure in ["prenorm", "hybridnorm", "hybridnorm_v2", "nonorm"]:
+        if cfg.structure in ["prenorm", "hybridnorm", "hybridnorm_v2", "hybridnorm_v3" "nonorm"]:
             x = self.dropout1(x)
         x = jnp.einsum("oegch,ehm->oegcm", x, self.parameters["wo_weight"])
         x = with_sharding_constraint(x, cfg.dim_to_mesh_axis_map["oegcm"])

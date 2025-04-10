@@ -455,14 +455,16 @@ class TransformerFeedForwardMoETest(parameterized.TestCase):
             output_collection.summaries["load_balance_loss_original"],
         )
 
-    @parameterized.parameters(
-        "prenorm",
-        "postnorm",
-        "hybridnorm",
-        "hybridnorm_v2",
-        "nonorm",
+    @parameterized.named_parameters(
+        ("test_case_0", "prenorm", False),
+        ("test_case_1", "postnorm", False),
+        ("test_case_2", "hybridnorm", False),
+        ("test_case_3", "hybridnorm_v2", False),
+        ("test_case_4", "hybridnorm_v3", False),
+        ("test_case_5", "hybridnorm_v3", True),
+        ("test_case_6", "nonorm", False),
     )
-    def test_layer_structure(self, structure):
+    def test_layer_structure(self, structure, apply_residual_norm):
         batch, seq_len, dim = 2, 3, 4
         cfg = TransformerFeedForwardMoE.default_config().set(
             name="moe",
@@ -472,6 +474,7 @@ class TransformerFeedForwardMoETest(parameterized.TestCase):
             structure=structure,
             num_experts=4,
             num_groups=2,
+            apply_residual_norm=apply_residual_norm,
         )
         layer = cfg.instantiate(parent=None)
         layer_params = layer.initialize_parameters_recursively(prng_key=jax.random.PRNGKey(0))
@@ -544,6 +547,33 @@ class TransformerFeedForwardMoETest(parameterized.TestCase):
                 is_training=False,
                 prng_key=jax.random.PRNGKey(0),
             )
+        elif structure == "hybridnorm_v3":
+            fn_input, _ = F(
+                layer.postnorm,
+                inputs=dict(x=inputs),
+                state=layer_params["postnorm"],
+                is_training=False,
+                prng_key=jax.random.PRNGKey(0),
+            )
+            if apply_residual_norm:
+                res_value, _ = F(
+                    layer.postnorm,
+                    inputs=dict(x=inputs),
+                    state=layer_params["resnorm"],
+                    is_training=False,
+                    prng_key=jax.random.PRNGKey(0),
+                )
+            else:
+                res_value = fn_input
+            ffn_output, _ = dispatch_and_combine_fn(inputs=dict(x=fn_input))
+            fn_output, _ = F(
+                layer.prenorm,
+                inputs=dict(x=ffn_output),
+                state=layer_params["prenorm"],
+                is_training=False,
+                prng_key=jax.random.PRNGKey(0),
+            )
+            x = res_value + fn_output
         elif structure == "nonorm":
             x, _ = dispatch_and_combine_fn(inputs=dict(x=inputs))
         else:
