@@ -3039,7 +3039,7 @@ class TransformerFeedForwardLayer(BaseLayer):
             "linear2",
             cfg.linear2.set(input_dim=hidden_dim, output_dim=cfg.input_dim),
         )
-        if cfg.structure in ["prenorm", "hybridnorm", "hybridnorm_v2", "hybridnorm_v3" "nonorm"]:
+        if cfg.structure in ["prenorm", "hybridnorm", "hybridnorm_v2", "hybridnorm_v3", "nonorm"]:
             self._add_child("dropout1", cfg.dropout)
             self._add_child("dropout2", cfg.dropout)
         elif cfg.structure in ["postnorm"]:
