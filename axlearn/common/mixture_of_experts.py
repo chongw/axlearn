@@ -850,6 +850,8 @@ class TransformerFeedForwardMoE(BaseLayer):
             ffn_output = self._dispatch_and_combine(fn_input)
             # the output of the transformation function.
             fn_output = self.stochastic_depth(self.dropout2(self.prenorm(ffn_output)))
+            if cfg.residual_weight != 1:
+                fn_output *= cfg.residual_weight
             # the final output with res_value & fn_output.
             x = res_value + fn_output
         elif cfg.structure == "nonorm":

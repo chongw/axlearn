@@ -2589,6 +2589,8 @@ class TransformerAttentionLayer(BaseLayer):
         # Optional apply_residual_norm parameter.
         apply_residual_norm: Optional[bool] = None
 
+        residual_weight: float = 1.0
+
     def __init__(self, config: Config, *, parent: Module):
         super().__init__(config, parent=parent)
         cfg = self.config
@@ -2763,6 +2765,8 @@ class TransformerAttentionLayer(BaseLayer):
             atten_state, atten_output = attention_thunk(fn_input)
             # the output of the transformation function.
             fn_output = self.stochastic_depth(self.dropout(self.prenorm(atten_output.data)))
+            if cfg.residual_weight != 1:
+                fn_output *= cfg.residual_weight
             # the final output with res_value & fn_output.
             data = res_value + fn_output
         else:
@@ -3121,6 +3125,8 @@ class TransformerFeedForwardLayer(BaseLayer):
             # the output of the transformation function.
             fn_output = self.stochastic_depth(self.dropout2(self.prenorm(ffn_output)))
             # the final output with res_value & fn_output.
+            if cfg.residual_weight != 1:
+                fn_output *= cfg.residual_weight
             x = res_value + fn_output
         elif cfg.structure == "nonorm":
             x = inputs
