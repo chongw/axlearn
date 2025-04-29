@@ -40,8 +40,8 @@ from axlearn.common.layers import (
     get_activation_fn,
 )
 from axlearn.common.metrics import WeightedScalar
-from axlearn.common.param_init import ConstantInitializer, FanAxes, constant_initializer
 from axlearn.common.module import Module, child_context
+from axlearn.common.param_init import ConstantInitializer, FanAxes, constant_initializer
 from axlearn.common.quantized_dot_general.layers import DenseGeneralBaseLayer
 from axlearn.common.utils import (
     Nested,
@@ -828,11 +828,12 @@ class TransformerFeedForwardMoE(DenseGeneralBaseLayer):
             x += inputs
         elif cfg.structure == "hybridnorm_v2":
             x = self._dispatch_and_combine(inputs)
+            x = self.prenorm(x)
             x = self.dropout2(x)
             x = self.stochastic_depth(x)
             if cfg.residual_weight != 1:
                 x *= cfg.residual_weight
-            x = self.postnorm(inputs + self.prenorm(x))
+            x = self.postnorm(inputs + x)
         elif cfg.structure == "nonorm":
             x = self._dispatch_and_combine(inputs)
             x = self.dropout2(x)

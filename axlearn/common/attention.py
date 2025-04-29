@@ -2739,7 +2739,7 @@ class TransformerAttentionLayer(BaseLayer):
         elif cfg.structure == "hybridnorm_v2":
             atten_state, atten_output = attention_thunk(target)
             data = self.postnorm(
-                target + self.prenorm(self.stochastic_depth(self.dropout(atten_output.data)))
+                target + self.stochastic_depth(self.dropout(self.prenorm(atten_output.data)))
             )
         else:
             raise NotImplementedError(cfg.structure)
@@ -3071,11 +3071,12 @@ class TransformerFeedForwardLayer(BaseLayer):
             x = self.dropout1(x)
             x = _linear2(x)
             x = self._remat_name(x, remat_pt2)
+            x = self.prenorm(x)
             x = self.dropout2(x)
             x = self.stochastic_depth(x)
             if cfg.residual_weight != 1:
                 x *= cfg.residual_weight
-            x = self.postnorm(inputs + self.prenorm(x))
+            x = self.postnorm(inputs + x)
         elif cfg.structure == "nonorm":
             x = inputs
             x = self._linear1_activation(x)
